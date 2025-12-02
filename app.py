@@ -61,15 +61,91 @@ def load_csv(file):
 # -----------------------------------------------------
 # MAIN DASHBOARD IF FILE EXISTS
 # -----------------------------------------------------
-if file:
-    df = load_csv(file)
 
-    if df is not None:
 
-        # Detect columns dynamically
-        date_col = next((c for c in df.columns if "date" in c), None)
-        amount_col = next((c for c in df.columns if "amount" in c or "expense" in c), None)
-        category_col = next((c for c in df.columns if "category" in c), None)
+    
+
+     # -------------------------
+# Robust column detection + UI for mapping CSV fields
+# -------------------------
+
+# show the column names so user can map them (helps debug)
+st.sidebar.markdown("### 🔎 Available columns in file")
+st.sidebar.write(list(df.columns))
+
+# helper: try to auto-suggest a column by keywords (returns first match or None)
+def autosuggest(cols, keywords):
+    for k in keywords:
+        for c in cols:
+            if k in c:
+                return c
+    return None
+
+# initial suggestions
+suggested_date = autosuggest(df.columns, ["date", "txn_date", "transaction_date", "time"])
+suggested_amount = autosuggest(df.columns, ["amount", "amt", "price", "value", "cost", "expense", "total"])
+suggested_category = autosuggest(df.columns, ["category", "cat", "type", "group"])
+
+# Let user explicitly choose which columns to use (preselect suggestions if found)
+st.sidebar.markdown("### ⚙️ Map your columns (pick the correct one)")
+date_col = st.sidebar.selectbox("Date column (choose)", options=[None] + list(df.columns), index=0 if not suggested_date else (list(df.columns).index(suggested_date) + 1))
+amount_col = st.sidebar.selectbox("Amount column (choose)", options=[None] + list(df.columns), index=0 if not suggested_amount else (list(df.columns).index(suggested_amount) + 1))
+category_col = st.sidebar.selectbox("Category column (optional)", options=[None] + list(df.columns), index=0 if not suggested_category else (list(df.columns).index(suggested_category) + 1))
+
+# Convert selected columns safely
+if date_col:
+    try:
+        df[date_col] = pd.to_datetime(df[date_col], errors="coerce")
+    except Exception:
+        st.warning("Could not convert chosen date column to datetimes; some filters/plots may not work.")
+
+if amount_col:
+    try:
+        df[amount_col] = pd.to_numeric(df[amount_col], errors="coerce")
+    except Exception:
+        st.warning("Could not convert chosen amount column to numeric; some calculations may be incorrect.")
+
+# If the user hasn't chosen an amount column, show an error and stop further KPIs (avoids KeyError)
+if not amount_col:
+    st.error("⚠️ Please select the **Amount column** from the sidebar. The app cannot compute totals without it.")
+    st.stop()
+
+# drop rows where amount is NaN after coercion (prevents weird sums)
+df = df.dropna(subset=[amount_col])
+
+# ---------- KPI METRICS (safe) ----------
+total_amount = df[amount_col].sum()
+num_transactions = len(df)
+
+st.markdown("### KPI Summary")
+col1, col2 = st.columns(2)
+col1.metric("💸 Total Amount", f"₹ {total_amount:,.2f}")
+col2.metric("📁 Transactions", f"{num_transactions}")
+
+# Continue with charts using the selected columns (use checks)
+st.subheader("📊 Visual Insights")
+
+if category_col:
+    # pie by category (safe)
+    try:
+        fig = px.pie(df, names=category_col, values=amount_col, title="Expense by Category")
+        st.plotly_chart(fig, use_container_width=True)
+    except Exception as e:
+        st.warning("Could not draw category pie chart: " + str(e))
+
+if date_col:
+    # time series (safe)
+    try:
+        timeseries_df = df.dropna(subset=[date_col]).sort_values(date_col)
+        fig2 = px.line(timeseries_df, x=date_col, y=amount_col, title="Expenses Over Time (by chosen date column)", markers=True)
+        st.plotly_chart(fig2, use_container_width=True)
+    except Exception as e:
+        st.warning("Could not draw time series chart: " + str(e))
+
+# show final data table and download
+st.subheader("📄 Data (mapped)")
+st.dataframe(df, use_container_width=True)
+st.download_button("⬇️ Download mapped CSV", df.to_csv(index=False), "mapped_budget.csv", "text/csv")
 
         # --------------------------
         # SIDEBAR FILTERS
